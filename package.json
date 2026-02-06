@@ -1,0 +1,32 @@
+{
+  "name": "openclaw-watchdog",
+  "version": "1.0.0",
+  "description": "Watchdog monitoring daemon for OpenClaw Gateway",
+  "main": "dist/watchdog.js",
+  "type": "module",
+  "bin": {
+    "openclaw-watchdog": "./dist/watchdog.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/watchdog.js",
+    "check": "node dist/watchdog.js check",
+    "dev": "npx tsx src/watchdog.ts",
+    "dev:check": "npx tsx src/watchdog.ts check",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": ["openclaw", "watchdog", "monitoring", "gateway"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

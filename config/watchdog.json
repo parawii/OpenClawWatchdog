@@ -1,0 +1,84 @@
+{
+  "$schema": "./watchdog.schema.json",
+  "version": "1.2.0",
+  "monitor": {
+    "enabled": true,
+    "intervalMs": 30000,
+    "healthTimeoutMs": 10000,
+    "logFile": "/tmp/openclaw/openclaw-{{date}}.log",
+    "reportsDir": "./reports"
+  },
+  "gateway": {
+    "url": "ws://127.0.0.1:18789",
+    "token": null,
+    "healthEndpoint": true
+  },
+  "dryRun": false,
+  "models": {
+    "quotaCheckEnabled": true,
+    "quotaRecoveryCheckIntervalMs": 300000,
+    "autoSwitch": true,
+    "sessionRules": {
+      "default": {
+        "allowedModels": [
+          "dgrid/anthropic/claude-opus-4.5",
+          "google-antigravity/claude-opus-4-5-thinking",
+          "google-antigravity/gemini-3-pro-high",
+          "google-antigravity/gemini-3-flash",
+          "opencode/big-pickle"
+        ],
+        "fallbackOrder": [
+          "dgrid/anthropic/claude-opus-4.5",
+          "google-antigravity/claude-opus-4-5-thinking",
+          "google-antigravity/gemini-3-pro-high",
+          "google-antigravity/gemini-3-flash",
+          "opencode/big-pickle"
+        ]
+      },
+      "agent:main:*": {
+        "allowedModels": [
+          "dgrid/anthropic/claude-opus-4.5",
+          "google-antigravity/claude-opus-4-5-thinking",
+          "google-antigravity/gemini-3-pro-high",
+          "google-antigravity/gemini-3-flash"
+        ],
+        "fallbackOrder": [
+          "dgrid/anthropic/claude-opus-4.5",
+          "google-antigravity/claude-opus-4-5-thinking",
+          "google-antigravity/gemini-3-pro-high",
+          "google-antigravity/gemini-3-flash"
+        ]
+      },
+      "agent:sub:*": {
+        "allowedModels": [
+          "google-antigravity/gemini-3-flash",
+          "opencode/big-pickle",
+          "opencode/gpt-5-nano"
+        ],
+        "fallbackOrder": [
+          "google-antigravity/gemini-3-flash",
+          "opencode/big-pickle",
+          "opencode/gpt-5-nano"
+        ]
+      }
+    }
+  },
+  "recovery": {
+    "enabled": true,
+    "maxRestartAttempts": 3,
+    "restartCooldownMs": 60000,
+    "strategies": [
+      "restart_gateway"
+    ]
+  },
+  "notifications": {
+    "enabled": true,
+    "channel": "telegram",
+    "target": "YOUR_TELEGRAM_CHAT_ID",
+    "topic": "20"
+  },
+  "logging": {
+    "level": "info",
+    "file": "./logs/watchdog.log"
+  }
+}
