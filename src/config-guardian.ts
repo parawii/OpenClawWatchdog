@@ -9,12 +9,12 @@
  */
 
 import { createHash } from 'crypto';
-import { 
-  readFile, 
-  writeFile, 
-  mkdir, 
-  readdir, 
-  unlink, 
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  readdir,
+  unlink,
   copyFile,
   stat,
   access,
@@ -141,7 +141,7 @@ export class ConfigGuardian {
 
     try {
       await copyFile(this.configPath, backupPath);
-      
+
       // Update hash index
       const index = await this.loadHashIndex();
       index[hash] = backupFilename;
@@ -224,11 +224,32 @@ export class ConfigGuardian {
       return { success: false, reason: 'No last-known-good backup exists' };
     }
 
+    // Check if config file was recently modified (grace period: 60 seconds)
+    // If someone is actively editing the config, skip rollback
+    const ROLLBACK_GRACE_MS = 60000;
+    try {
+      const configStat = await stat(this.configPath);
+      const sinceLastModified = Date.now() - configStat.mtimeMs;
+      if (sinceLastModified < ROLLBACK_GRACE_MS) {
+        const remainingSec = Math.ceil((ROLLBACK_GRACE_MS - sinceLastModified) / 1000);
+        logger.info('Config file recently modified, skipping rollback (grace period)', {
+          lastModifiedAgo: `${Math.floor(sinceLastModified / 1000)}s`,
+          graceRemaining: `${remainingSec}s`,
+        });
+        return {
+          success: false,
+          reason: `Config file modified ${Math.floor(sinceLastModified / 1000)}s ago, skipping rollback (grace period: ${ROLLBACK_GRACE_MS / 1000}s)`
+        };
+      }
+    } catch {
+      // Cannot stat config file, proceed with rollback
+    }
+
     try {
       // Backup current (broken) config before overwriting
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const corruptedBackup = join(this.backupDir, `openclaw.json.corrupted-${timestamp}.bak`);
-      
+
       try {
         await copyFile(this.configPath, corruptedBackup);
         logger.info('Saved corrupted config', { path: corruptedBackup });
@@ -238,7 +259,7 @@ export class ConfigGuardian {
 
       // Restore last-known-good
       await copyFile(this.lastKnownGoodFile, this.configPath);
-      
+
       logger.info('Rolled back to last-known-good config');
       return { success: true, reason: 'Restored from last-known-good backup' };
 
@@ -256,7 +277,7 @@ export class ConfigGuardian {
       await this.init();
       const files = await readdir(this.backupDir);
       const index = await this.loadHashIndex();
-      
+
       // Reverse the index for filename -> hash lookup
       const filenameToHash: Record<string, string> = {};
       for (const [hash, filename] of Object.entries(index)) {
@@ -264,10 +285,10 @@ export class ConfigGuardian {
       }
 
       const backups: BackupInfo[] = [];
-      
+
       for (const file of files) {
         if (!file.endsWith('.bak')) continue;
-        
+
         const filePath = join(this.backupDir, file);
         try {
           const fileStat = await stat(filePath);
@@ -284,7 +305,7 @@ export class ConfigGuardian {
 
       // Sort by timestamp descending
       backups.sort((a, b) => b.timestamp - a.timestamp);
-      
+
       return backups;
     } catch {
       return [];
@@ -296,7 +317,7 @@ export class ConfigGuardian {
    */
   async rollbackTo(filename: string): Promise<{ success: boolean; reason: string }> {
     const backupPath = join(this.backupDir, filename);
-    
+
     try {
       await access(backupPath);
     } catch {
@@ -315,7 +336,7 @@ export class ConfigGuardian {
       // Save current config before overwriting
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const preRollbackBackup = join(this.backupDir, `openclaw.json.pre-rollback-${timestamp}.bak`);
-      
+
       try {
         await copyFile(this.configPath, preRollbackBackup);
       } catch {
@@ -324,7 +345,7 @@ export class ConfigGuardian {
 
       // Restore selected backup
       await copyFile(backupPath, this.configPath);
-      
+
       logger.info('Rolled back to specific backup', { filename });
       return { success: true, reason: `Restored from ${filename}` };
 
@@ -344,7 +365,7 @@ export class ConfigGuardian {
   }> {
     const configCheck = await this.isConfigValid();
     const hash = await this.getConfigHash();
-    
+
     let hasLastKnownGood = false;
     try {
       await access(this.lastKnownGoodFile);

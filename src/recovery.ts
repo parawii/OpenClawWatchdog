@@ -16,6 +16,7 @@ export interface RecoveryState {
   restartAttempts: number;
   lastRestartAt: number | null;
   consecutiveFailures: number;
+  consecutiveCriticalCycles: number;
   modelSwitchAttempts: Map<string, number>;  // model -> switch count
   lastModelSwitch: number | null;
 }
@@ -36,6 +37,7 @@ export class RecoveryEngine {
       restartAttempts: 0,
       lastRestartAt: null,
       consecutiveFailures: 0,
+      consecutiveCriticalCycles: 0,
       modelSwitchAttempts: new Map(),
       lastModelSwitch: null,
     };
@@ -51,9 +53,9 @@ export class RecoveryEngine {
 
     // Check max attempts
     if (this.state.restartAttempts >= this.config.maxRestartAttempts) {
-      return { 
-        allowed: false, 
-        reason: `Max restart attempts reached (${this.config.maxRestartAttempts})` 
+      return {
+        allowed: false,
+        reason: `Max restart attempts reached (${this.config.maxRestartAttempts})`
       };
     }
 
@@ -62,9 +64,9 @@ export class RecoveryEngine {
       const elapsed = Date.now() - this.state.lastRestartAt;
       if (elapsed < this.config.restartCooldownMs) {
         const remainingMs = this.config.restartCooldownMs - elapsed;
-        return { 
-          allowed: false, 
-          reason: `Cooldown active (${Math.ceil(remainingMs / 1000)}s remaining)` 
+        return {
+          allowed: false,
+          reason: `Cooldown active (${Math.ceil(remainingMs / 1000)}s remaining)`
         };
       }
     }
@@ -114,7 +116,7 @@ export class RecoveryEngine {
       } catch {
         // Ignore stop errors
       }
-      
+
       // Force kill if still running
       try {
         // Kill by process name (openclaw-gateway)
@@ -124,7 +126,7 @@ export class RecoveryEngine {
       } catch {
         // Ignore kill errors (process may not exist)
       }
-      
+
       // Wait for cleanup
       await this.sleep(2000);
 
@@ -135,13 +137,13 @@ export class RecoveryEngine {
         timeout: 5000,
         shell: '/bin/bash',
       });
-      
+
       // Wait for startup
       await this.sleep(5000);
 
       // Step 3: Verify by checking if process is running AND port is listening
       const healthy = await this.verifyGateway();
-      
+
       if (healthy) {
         action.description = 'Gateway restarted successfully';
         action.result = 'success';
@@ -175,7 +177,7 @@ export class RecoveryEngine {
         timeout: 5000,
         shell: '/bin/bash',
       });
-      
+
       if (!psOut.trim()) {
         logger.error('Gateway process not found after restart');
         return false;
@@ -187,7 +189,7 @@ export class RecoveryEngine {
       const { stdout: portOut } = await execAsync('lsof -i :18789 -t || echo ""', {
         timeout: 5000,
       });
-      
+
       if (!portOut.trim()) {
         logger.error('Gateway not listening on port 18789');
         return false;
@@ -202,7 +204,7 @@ export class RecoveryEngine {
 
       const firstBrace = stdout.indexOf('{');
       const lastBrace = stdout.lastIndexOf('}');
-      
+
       if (firstBrace === -1 || lastBrace === -1) {
         logger.error('Invalid health response');
         return false;
@@ -241,10 +243,41 @@ export class RecoveryEngine {
   async handleRecovery(report: WatchdogReport): Promise<Action[]> {
     const actions: Action[] = [];
 
-    // Check if restart is needed
+    // Track consecutive critical cycles for grace period
+    if (report.status === 'critical') {
+      this.state.consecutiveCriticalCycles++;
+      logger.info('Critical status detected', {
+        consecutiveCycles: this.state.consecutiveCriticalCycles,
+        gracePeriodCycles: this.config.gracePeriodCycles,
+      });
+    } else {
+      if (this.state.consecutiveCriticalCycles > 0) {
+        logger.info('Status recovered, resetting critical cycle counter', {
+          previousCycles: this.state.consecutiveCriticalCycles,
+        });
+      }
+      this.state.consecutiveCriticalCycles = 0;
+    }
+
+    // Check if restart is needed (with grace period)
     if (this.shouldRestart(report)) {
-      const action = await this.restartGateway();
-      actions.push(action);
+      if (this.state.consecutiveCriticalCycles >= this.config.gracePeriodCycles) {
+        const action = await this.restartGateway();
+        actions.push(action);
+      } else {
+        const remaining = this.config.gracePeriodCycles - this.state.consecutiveCriticalCycles;
+        logger.warn(`Grace period active: ${remaining} more cycle(s) before restart`, {
+          currentCycles: this.state.consecutiveCriticalCycles,
+          required: this.config.gracePeriodCycles,
+        });
+        actions.push({
+          ts: Date.now(),
+          type: 'restart',
+          description: `Restart deferred: grace period (${this.state.consecutiveCriticalCycles}/${this.config.gracePeriodCycles} cycles)`,
+          dryRun: this.dryRun,
+          result: 'skipped',
+        });
+      }
     }
 
     // Check if model switching is needed
@@ -265,7 +298,7 @@ export class RecoveryEngine {
     // Check for model errors that need switching
     for (const modelError of report.logAnalysis.modelErrors) {
       if (!modelError.recoverable) continue;
-      
+
       // Find fallback model
       const fallback = this.findFallbackModel(modelError.model, modelError.sessionKey);
       if (!fallback) {
@@ -304,7 +337,7 @@ export class RecoveryEngine {
 
     // Find matching rule
     let rule = this.modelConfig.sessionRules['default'];
-    
+
     if (sessionKey) {
       // Check for exact match
       if (this.modelConfig.sessionRules[sessionKey]) {
@@ -371,7 +404,7 @@ export class RecoveryEngine {
       // Switch all sessions using the failed model
       const results = await this.modelSwitcher.switchAllSessionsFromModel(fromModel, toModel);
       const successCount = results.filter(r => r.success).length;
-      
+
       if (successCount > 0) {
         action.description = `Switched ${successCount}/${results.length} sessions from ${fromModel} to ${toModel}`;
         action.result = 'success';
@@ -385,7 +418,7 @@ export class RecoveryEngine {
     } else {
       // Switch specific session
       result = await this.modelSwitcher.switchSessionModel(sessionKey, toModel);
-      
+
       if (result.success) {
         action.description = `Switched ${sessionKey} from ${fromModel} to ${toModel}`;
         action.result = 'success';

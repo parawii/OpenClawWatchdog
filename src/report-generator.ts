@@ -4,25 +4,33 @@
  * Generates detailed reports for analysis and recommendations.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readdir, unlink, stat } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import type { 
-  WatchdogReport, 
-  HealthStatus, 
-  LogAnalysis, 
+import type {
+  WatchdogReport,
+  HealthStatus,
+  LogAnalysis,
   ModelStatus,
   Recommendation,
-  Action 
+  Action,
+  ReportsConfig,
 } from './types.js';
 import { logger } from './logger.js';
 
 export class ReportGenerator {
   private reportsDir: string;
   private actionsPerformed: Action[] = [];
+  private lastStatus: WatchdogReport['status'] | null = null;
+  private reportsConfig: ReportsConfig;
 
-  constructor(reportsDir: string) {
+  constructor(reportsDir: string, reportsConfig?: ReportsConfig) {
     this.reportsDir = reportsDir;
+    this.reportsConfig = reportsConfig || {
+      saveOnChangeOnly: true,
+      maxReports: 50,
+      maxAgeDays: 7,
+    };
   }
 
   /**
@@ -48,8 +56,25 @@ export class ReportGenerator {
 
     report.summary = this.buildSummary(report);
 
-    // Save report to file
-    await this.saveReport(report);
+    // Save report to file (respecting saveOnChangeOnly policy)
+    const statusChanged = this.lastStatus !== null && this.lastStatus !== report.status;
+    const isFirstReport = this.lastStatus === null;
+
+    if (!this.reportsConfig.saveOnChangeOnly || isFirstReport || statusChanged) {
+      await this.saveReport(report);
+
+      if (statusChanged) {
+        logger.info('Status changed, report saved', {
+          from: this.lastStatus,
+          to: report.status,
+        });
+      }
+    } else {
+      logger.debug('Status unchanged, skipping report save', { status: report.status });
+    }
+
+    // Update last status
+    this.lastStatus = report.status;
 
     // Clear actions after generating report
     this.actionsPerformed = [];
@@ -153,10 +178,10 @@ export class ReportGenerator {
     // Add log analysis recommendations
     for (const rec of logAnalysis.recommendations) {
       const priority = rec.startsWith('[CRITICAL]') ? 'critical' :
-                       rec.startsWith('[HIGH]') ? 'high' :
-                       rec.startsWith('[MEDIUM]') ? 'medium' : 'low';
+        rec.startsWith('[HIGH]') ? 'high' :
+          rec.startsWith('[MEDIUM]') ? 'medium' : 'low';
       const message = rec.replace(/^\[(?:CRITICAL|HIGH|MEDIUM|LOW)\]\s*/, '');
-      
+
       recs.push({
         priority,
         category: 'logs',
@@ -231,8 +256,71 @@ export class ReportGenerator {
       const txtPath = join(this.reportsDir, txtFilename);
       await writeFile(txtPath, this.formatReportText(report));
 
+      // Cleanup old reports
+      await this.cleanupOldReports();
+
     } catch (error) {
       logger.error('Failed to save report', { error: (error as Error).message });
+    }
+  }
+
+  /**
+   * Cleanup old reports based on retention policy
+   */
+  private async cleanupOldReports(): Promise<void> {
+    try {
+      const files = await readdir(this.reportsDir);
+      const reportFiles = files
+        .filter(f => f.startsWith('report-') && (f.endsWith('.json') || f.endsWith('.txt')))
+        .sort()  // Sorted by timestamp (ascending)
+        .reverse();  // Most recent first
+
+      // Group by report ID (each report has .json + .txt)
+      const reportGroups = new Map<string, string[]>();
+      for (const file of reportFiles) {
+        // Extract base name without extension: report-TIMESTAMP-ID
+        const base = file.replace(/\.(json|txt)$/, '');
+        const group = reportGroups.get(base) || [];
+        group.push(file);
+        reportGroups.set(base, group);
+      }
+
+      const sortedGroups = Array.from(reportGroups.entries());
+      let deletedCount = 0;
+
+      // Remove excess reports (by count)
+      if (sortedGroups.length > this.reportsConfig.maxReports) {
+        const toRemove = sortedGroups.slice(this.reportsConfig.maxReports);
+        for (const [, groupFiles] of toRemove) {
+          for (const file of groupFiles) {
+            await unlink(join(this.reportsDir, file));
+            deletedCount++;
+          }
+        }
+      }
+
+      // Remove old reports (by age)
+      const maxAgeMs = this.reportsConfig.maxAgeDays * 24 * 60 * 60 * 1000;
+      const cutoffTs = Date.now() - maxAgeMs;
+
+      for (const file of reportFiles) {
+        const filePath = join(this.reportsDir, file);
+        try {
+          const fileStat = await stat(filePath);
+          if (fileStat.mtimeMs < cutoffTs) {
+            await unlink(filePath);
+            deletedCount++;
+          }
+        } catch {
+          // File may have been deleted already
+        }
+      }
+
+      if (deletedCount > 0) {
+        logger.info('Cleaned up old reports', { deletedCount });
+      }
+    } catch (error) {
+      logger.error('Failed to cleanup reports', { error: (error as Error).message });
     }
   }
 

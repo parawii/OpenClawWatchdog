@@ -19,6 +19,13 @@ export interface MonitorConfig {
   healthTimeoutMs: number;
   logFile: string;
   reportsDir: string;
+  reports?: ReportsConfig;
+}
+
+export interface ReportsConfig {
+  saveOnChangeOnly: boolean;
+  maxReports: number;
+  maxAgeDays: number;
 }
 
 export interface GatewayConfig {
@@ -43,6 +50,7 @@ export interface RecoveryConfig {
   enabled: boolean;
   maxRestartAttempts: number;
   restartCooldownMs: number;
+  gracePeriodCycles: number;
   strategies: RecoveryStrategy[];
 }
 

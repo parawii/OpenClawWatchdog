@@ -62,7 +62,7 @@ export class Watchdog {
     );
     this.logAnalyzer = new LogAnalyzer(config.monitor.logFile);
     this.modelGuard = new ModelQuotaGuard(config.models);
-    this.reportGenerator = new ReportGenerator(config.monitor.reportsDir);
+    this.reportGenerator = new ReportGenerator(config.monitor.reportsDir, config.monitor.reports);
     this.recoveryEngine = new RecoveryEngine(config.recovery, config.dryRun, config.models);
     this.configGuardian = new ConfigGuardian();
     this.notifier = new Notifier(config.notifications, config.dryRun);
@@ -108,7 +108,7 @@ export class Watchdog {
     if (!this.running) return;
 
     logger.info('Stopping watchdog...');
-    
+
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
@@ -158,7 +158,7 @@ export class Watchdog {
       if (this.healthyStreak >= 5) {
         this.recoveryEngine.resetAttempts();
       }
-      
+
       // Backup config if this version hasn't been backed up yet
       const backupResult = await this.configGuardian.backupIfNeeded();
       if (backupResult.backed) {
@@ -205,23 +205,22 @@ export class Watchdog {
   private async handleRecoveryActions(report: WatchdogReport): Promise<void> {
     // Check if config is valid first
     const configStatus = await this.configGuardian.isConfigValid();
-    
+
     if (!configStatus.valid) {
       logger.error('Config file is invalid', { error: configStatus.error });
-      
+
       // Attempt rollback to last-known-good
       if (!this.config.dryRun) {
         const rollbackResult = await this.configGuardian.rollbackToLastKnownGood();
         this.reportGenerator.recordAction({
-          ts: Date.now(),
           type: 'config_rollback' as any,
-          description: rollbackResult.success 
+          description: rollbackResult.success
             ? `Config rolled back: ${rollbackResult.reason}`
             : `Config rollback failed: ${rollbackResult.reason}`,
           dryRun: false,
           result: rollbackResult.success ? 'success' : 'failed',
         });
-        
+
         if (rollbackResult.success) {
           logger.info('Config rolled back successfully, will attempt Gateway restart');
         }
@@ -232,11 +231,11 @@ export class Watchdog {
 
     // Use RecoveryEngine to handle restart logic
     const actions = await this.recoveryEngine.handleRecovery(report);
-    
+
     // Record all actions
     for (const action of actions) {
       this.reportGenerator.recordAction(action);
-      
+
       // Update state if restart was attempted
       if (action.type === 'restart' && action.result !== 'skipped') {
         this.state.restartAttempts++;
@@ -261,10 +260,10 @@ export class Watchdog {
   async runOnce(): Promise<WatchdogReport> {
     logger.info('Running single monitoring check...');
     const report = await this.runMonitoringCycle();
-    
+
     // Print summary to console
     console.log('\n' + report.summary + '\n');
-    
+
     return report;
   }
 
@@ -336,7 +335,7 @@ async function main(): Promise<void> {
       process.on('SIGTERM', shutdown);
 
       // Keep process alive
-      await new Promise(() => {}); // Never resolves
+      await new Promise(() => { }); // Never resolves
     } else if (command === 'notify-test') {
       // Send test notification
       const notifier = new Notifier(config.notifications, config.dryRun);
@@ -346,7 +345,7 @@ async function main(): Promise<void> {
     } else if (command === 'service-install') {
       const plistSource = join(__dirname, '../com.openclaw.watchdog.plist');
       const plistDest = join(homedir(), 'Library/LaunchAgents/com.openclaw.watchdog.plist');
-      
+
       console.log('Installing launchd service...');
       try {
         await execAsync(`cp "${plistSource}" "${plistDest}"`);
@@ -360,7 +359,7 @@ async function main(): Promise<void> {
       process.exit(0);
     } else if (command === 'service-uninstall') {
       const plistDest = join(homedir(), 'Library/LaunchAgents/com.openclaw.watchdog.plist');
-      
+
       console.log('Uninstalling launchd service...');
       try {
         await execAsync(`launchctl unload "${plistDest}"`);
